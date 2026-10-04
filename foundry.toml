@@ -1,0 +1,29 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = ["node_modules"]
+solc_version = "0.8.30"
+evm_version = "prague"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "ipfs"
+remappings = ["forge-std/=node_modules/forge-std/src/"]
+fs_permissions = [{ access = "read", path = "./" }]
+
+[fuzz]
+runs = 512
+seed = "0xa11ce"
+
+[invariant]
+runs = 64
+depth = 96
+fail_on_revert = false
+
+[profile.ci.fuzz]
+runs = 5000
+
+# `forge lint` reports three block-timestamp notes in the contract. They are intended:
+# expiry and the rolling day are measured in block time. See the README threat model.
+[lint]
+lint_on_build = false

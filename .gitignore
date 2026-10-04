@@ -1,0 +1,13 @@
+node_modules/
+out/
+cache/
+broadcast/
+.env
+.env.*
+!.env.example
+deployments/local.json
+SCENARIO-local.md
+# never commit keys
+*.key
+wallet/
+deployer.json

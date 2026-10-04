@@ -1,0 +1,26 @@
+{
+  "name": "agent-allowance-vault",
+  "version": "0.1.0",
+  "description": "A small, non-upgradeable USDC vault on Arc that lets a person fund an AI agent under hard on-chain limits.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "test:arc-fork": "arc-forge test --match-contract ArcForkTest --fork-url https://rpc.testnet.arc.io -vv",
+    "test:mutants": "node script/mutation-check.mjs",
+    "check:web": "node script/check-web-constants.mjs",
+    "abi": "node script/export-abi.mjs",
+    "deploy:testnet": "node script/deploy.mjs --network arc-testnet",
+    "deploy:mainnet": "node script/deploy.mjs --network arc-mainnet --yes-mainnet",
+    "scenario:testnet": "node script/scenario.mjs --network arc-testnet --out TESTNET.md",
+    "scenario:mainnet": "node script/scenario.mjs --network arc-mainnet --yes-mainnet --out MAINNET.md"
+  },
+  "dependencies": {
+    "viem": "2.57.2"
+  },
+  "devDependencies": {
+    "forge-std": "github:foundry-rs/forge-std#v1.17.0"
+  }
+}

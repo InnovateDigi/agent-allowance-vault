@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Allowance Vault on Arc</title>
+<meta name="description" content="Fund an AI agent with USDC on Arc under hard on-chain limits. Owner dashboard and read-only audit view.">
+<!-- One static file. No build step, no external scripts, no fonts, no trackers.
+     Reads go to the public Arc RPC with fetch(); writes go through the wallet in the browser (EIP-1193). -->
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#14181f; --muted:#5b6472; --line:#d9dee6; --accent:#1f5fbf; --ok:#17794a; --bad:#b3261e; --warn:#8a5a00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1318; --card:#171c23; --text:#e8ecf1; --muted:#9aa5b4; --line:#2a323d; --accent:#7fb0ff; --ok:#5fd39a; --bad:#ff8a80; --warn:#f2c46d; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 1020px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 0 0 10px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--card); border:1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 0 0 14px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); flex: 1 1 160px; }
+  label.wide { flex: 3 1 380px; } label.check { flex-direction:row; align-items:center; gap:6px; flex: 0 0 auto; font-size: 14px; color: var(--text); }
+  input, select, textarea, button { font: inherit; color: inherit; }
+  input, select, textarea { background: transparent; border:1px solid var(--line); border-radius: 7px; padding: 7px 9px; min-width: 0; }
+  textarea { min-height: 58px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  button { border:1px solid var(--accent); background: var(--accent); color:#fff; border-radius: 7px; padding: 7px 14px; cursor:pointer; }
+  @media (prefers-color-scheme: dark) { button { color:#0f1318; } }
+  button.ghost { background: transparent; color: var(--accent); } button.danger { background: var(--bad); border-color: var(--bad); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .tabs { display:flex; gap:6px; margin: 0 0 14px; } .tabs button { background:transparent; color:var(--text); border-color:var(--line); }
+  .tabs button[aria-selected="true"] { background: var(--accent); color:#fff; border-color: var(--accent); }
+  @media (prefers-color-scheme: dark) { .tabs button[aria-selected="true"] { color:#0f1318; } }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:10px; }
+  .stat { border:1px solid var(--line); border-radius:8px; padding:8px 10px; } .stat b { display:block; font-size:17px; word-break: break-all; } .stat span { font-size:12px; color:var(--muted); }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  table { width:100%; border-collapse: collapse; font-size: 13px; } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; } tr.hit td { background: rgba(31,95,191,.14); }
+  .scroll { overflow-x:auto; } td a { white-space: nowrap; } a { color: var(--accent); } hr { border:0; border-top:1px solid var(--line); margin:14px 0; }
+  #log { white-space: pre-wrap; max-height: 180px; overflow:auto; margin:0; } [hidden] { display:none !important; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent Allowance Vault</h1>
+  <p class="lead">A person funds the vault with USDC on Arc and gives each AI agent key a policy: a cap per payment, a cap per rolling day, an optional list of payees and an expiry. The agent can pay within that policy and can do nothing else.</p>
+
+  <section class="card">
+    <div class="row">
+      <label>Network
+        <select id="net">
+          <option value="mainnet">Arc mainnet (5042)</option>
+          <option value="testnet">Arc Testnet (5042002)</option>
+        </select>
+      </label>
+      <label class="wide">Vault address <input id="vault" class="mono" placeholder="0x..." spellcheck="false" autocomplete="off"></label>
+      <button id="load">Load</button>
+    </div>
+    <p id="loadMsg" class="muted" style="margin:10px 0 0"></p>
+    <div id="summary" class="grid" style="margin-top:12px" hidden>
+      <div class="stat"><span>Vault balance</span><b id="sBalance">-</b></div>
+      <div class="stat"><span>Status</span><b id="sPaused">-</b></div>
+      <div class="stat"><span>Payments so far</span><b id="sCount">-</b></div>
+      <div class="stat"><span>Owner</span><b id="sOwner" class="mono">-</b></div>
+    </div>
+  </section>
+
+  <div class="tabs" role="tablist">
+    <button id="tabAudit" role="tab" aria-selected="true">Audit (read-only)</button>
+    <button id="tabOwner" role="tab" aria-selected="false">Owner dashboard</button>
+  </div>
+
+  <!-- ============================== AUDIT ============================== -->
+  <section id="audit">
+    <div class="card">
+      <h2>What has this agent paid?</h2>
+      <div class="row">
+        <label class="wide">Agent address (leave empty for every agent) <input id="aAgent" class="mono" placeholder="0x..." spellcheck="false" autocomplete="off"></label>
+        <label>History
+          <select id="aRange">
+            <option value="20000">last 20,000 blocks (about 3 hours)</option>
+            <option value="172800" selected>last 172,800 blocks (about 1 day)</option>
+            <option value="1209600">last 1,209,600 blocks (about 7 days)</option>
+            <option value="from">from the block below</option>
+          </select>
+        </label>
+        <label>From block <input id="aFrom" inputmode="numeric" placeholder="deployment block"></label>
+        <button id="aRun">Read events</button>
+      </div>
+      <p id="aMsg" class="muted" style="margin:10px 0 0">Nothing is needed to use this view: no wallet, no account. It reads the vault's Payment events from the public Arc RPC.</p>
+    </div>
+    <div id="aPolicyCard" class="card" hidden>
+      <h2>Policy of this agent right now</h2>
+      <div class="grid">
+        <div class="stat"><span>State</span><b id="pState">-</b></div>
+        <div class="stat"><span>Cap per payment</span><b id="pPer">-</b></div>
+        <div class="stat"><span>Cap per rolling day</span><b id="pDay">-</b></div>
+        <div class="stat"><span>Spent in the window</span><b id="pSpent">-</b></div>
+        <div class="stat"><span>Can pay now, at most</span><b id="pAvail">-</b></div>
+        <div class="stat"><span>Expires</span><b id="pExp" style="font-size:13px">-</b></div>
+        <div class="stat"><span>Payees</span><b id="pPayees" style="font-size:13px">-</b></div>
+        <div class="stat"><span>Paid in total (on chain)</span><b id="pTotal">-</b></div>
+      </div>
+    </div>
+    <div id="aResult" class="card" hidden>
+      <h2 id="aTitle">Payments</h2>
+      <p id="aCheck" style="margin:0 0 10px"></p>
+      <div class="row" style="margin-bottom:10px">
+        <label class="wide">Check a memo: type the text the agent says it committed to <input id="aMemo" placeholder="for example: invoice-001"></label>
+        <span id="aMemoHash" class="mono muted"></span>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>Time (UTC)</th><th>Agent</th><th>Payee</th><th>USDC</th><th>Memo hash</th><th>Transaction</th></tr></thead>
+        <tbody id="aRows"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ============================== OWNER ============================== -->
+  <section id="owner" hidden>
+    <div class="card">
+      <div class="row">
+        <button id="connect">Connect wallet</button>
+        <span id="who" class="muted">Not connected. Only the vault's owner can use the controls below; everyone else's transactions revert.</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Fund</h2>
+      <div class="row">
+        <label>Amount (USDC) <input id="fAmount" inputmode="decimal" placeholder="10"></label>
+        <button id="fund">Send USDC to the vault</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">One plain USDC transfer through the ERC-20 interface. No approval is left behind.</p>
+    </div>
+    <div class="card">
+      <h2>Set an agent's policy</h2>
+      <div class="row">
+        <label class="wide">Agent address <input id="pAgent" class="mono" placeholder="0x..." spellcheck="false" autocomplete="off"></label>
+        <label>Cap per payment (USDC) <input id="pMaxPay" inputmode="decimal" placeholder="1"></label>
+        <label>Cap per rolling day (USDC) <input id="pMaxDay" inputmode="decimal" placeholder="5"></label>
+        <label>Expires (your local time) <input id="pExpiry" type="datetime-local"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="check"><input id="pRestrict" type="checkbox" checked> Only these payees:</label>
+        <label class="wide">One address per line <textarea id="pList" spellcheck="false" placeholder="0x..."></textarea></label>
+        <button id="setPolicy">Set policy</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">Setting a policy replaces the earlier one and its payee list. It never resets what the agent has already spent in the rolling day.</p>
+      <hr>
+      <div class="row">
+        <label class="wide">Payee address <input id="yPayee" class="mono" placeholder="0x..." spellcheck="false" autocomplete="off"></label>
+        <button id="addPayee" class="ghost">Allow payee</button>
+        <button id="delPayee" class="ghost">Remove payee</button>
+        <button id="revoke" class="danger">Revoke this agent</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Stop and withdraw</h2>
+      <div class="row">
+        <button id="pause" class="danger">Pause all agents</button>
+        <button id="unpause" class="ghost">Unpause</button>
+        <label>Amount (USDC), empty for everything <input id="wAmount" inputmode="decimal" placeholder="all"></label>
+        <label class="wide">To (empty: your connected address) <input id="wTo" class="mono" placeholder="0x..." spellcheck="false" autocomplete="off"></label>
+        <button id="withdraw">Withdraw</button>
+      </div>
+    </div>
+    <div class="card"><h2>Activity</h2><pre id="log" class="mono muted">Nothing yet.</pre></div>
+  </section>
+
+  <footer>
+    Static page, no server. The code of the vault and of this page was written by an AI system and has not had a professional security audit.
+    Use small amounts. MIT licence.
+  </footer>
+</main>
+
+<script>
+"use strict";
+// ------------------------------------------------------------------ configuration
+const NETS = {
+  mainnet: { chainId: 5042, name: "Arc", rpc: "https://rpc.mainnet.arc.io", explorer: "https://explorer.arc.io" },
+  testnet: { chainId: 5042002, name: "Arc Testnet", rpc: "https://rpc.testnet.arc.io", explorer: "https://explorer.testnet.arc.io" },
+};
+const USDC = "0x3600000000000000000000000000000000000000"; // USDC's ERC-20 interface on Arc, 6 decimals
+const LOG_CHUNK = 9999n; // the public RPC answers at most 10,000 blocks per eth_getLogs call
+const SIGNATURES = {
+  owner: "owner()", paused: "paused()", vaultBalance: "vaultBalance()", paymentCount: "paymentCount()",
+  policyOf: "policyOf(address)", spentInWindow: "spentInWindow(address)", availableToPay: "availableToPay(address)",
+  totalPaidBy: "totalPaidBy(address)", pause: "pause()", unpause: "unpause()", withdraw: "withdraw(address,uint256)",
+  withdrawAll: "withdrawAll(address)", revokeAgent: "revokeAgent(address)", setPayee: "setPayee(address,address,bool)",
+  setPolicy: "setPolicy(address,uint256,uint256,uint256,bool,address[])", transfer: "transfer(address,uint256)",
+};
+const PAYMENT_EVENT = "Payment(address,address,bytes32,uint256,uint256,uint256)";
+const ERRORS = ["NotOwner()", "ZeroAddress()", "ZeroAmount()", "NotUSDC()", "Reentrancy()", "TransferFailed()", "InvalidPolicy()",
+  "ExpiryNotInFuture()", "VaultPaused()", "NoPolicy()", "PolicyExpired(uint256)", "InvalidPayee()", "PayeeNotAllowed(address)",
+  "ExceedsPerPaymentCap(uint256,uint256)", "ExceedsDailyCap(uint256,uint256)", "InsufficientVaultBalance(uint256,uint256)"];
+
+// ------------------------------------------------------------------ keccak256 (no dependency)
+function keccak256(bytes) {
+  const RC = [0x1n, 0x8082n, 0x800000000000808an, 0x8000000080008000n, 0x808bn, 0x80000001n, 0x8000000080008081n, 0x8000000000008009n,
+    0x8an, 0x88n, 0x80008009n, 0x8000000an, 0x8000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+    0x8000000000008002n, 0x8000000000000080n, 0x800an, 0x800000008000000an, 0x8000000080008081n, 0x8000000000008080n, 0x80000001n, 0x8000000080008008n];
+  const ROT = [0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14];
+  const M = (1n << 64n) - 1n;
+  const rol = (v, n) => (n === 0 ? v : ((v << BigInt(n)) | (v >> BigInt(64 - n))) & M);
+  const rate = 136;
+  const padded = new Uint8Array(bytes.length + (rate - (bytes.length % rate)));
+  padded.set(bytes); padded[bytes.length] ^= 0x01; padded[padded.length - 1] ^= 0x80;
+  const s = new Array(25).fill(0n);
+  for (let off = 0; off < padded.length; off += rate) {
+    for (let i = 0; i < rate / 8; i++) { let w = 0n; for (let j = 7; j >= 0; j--) w = (w << 8n) | BigInt(padded[off + i * 8 + j]); s[i] ^= w; }
+    for (let round = 0; round < 24; round++) {
+      const C = [0, 1, 2, 3, 4].map((x) => s[x] ^ s[x + 5] ^ s[x + 10] ^ s[x + 15] ^ s[x + 20]);
+      for (let x = 0; x < 5; x++) { const D = C[(x + 4) % 5] ^ rol(C[(x + 1) % 5], 1); for (let y = 0; y < 25; y += 5) s[x + y] ^= D; }
+      const B = new Array(25);
+      for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) B[y + 5 * ((2 * x + 3 * y) % 5)] = rol(s[x + 5 * y], ROT[x + 5 * y]);
+      for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) s[x + 5 * y] = B[x + 5 * y] ^ (~B[((x + 1) % 5) + 5 * y] & M & B[((x + 2) % 5) + 5 * y]);
+      s[0] ^= RC[round];
+    }
+  }
+  let out = "0x";
+  for (let i = 0; i < 4; i++) { let w = s[i]; for (let j = 0; j < 8; j++) { out += Number(w & 0xffn).toString(16).padStart(2, "0"); w >>= 8n; } }
+  return out;
+}
+const utf8 = (text) => new TextEncoder().encode(text);
+const selector = (signature) => keccak256(utf8(signature)).slice(0, 10);
+const topic = (signature) => keccak256(utf8(signature));
+
+// ------------------------------------------------------------------ ABI helpers (static types and one address[])
+const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(a);
+const word = (n) => BigInt(n).toString(16).padStart(64, "0");
+const addrWord = (a) => a.slice(2).toLowerCase().padStart(64, "0");
+const call0 = (name) => selector(SIGNATURES[name]);
+const call = (name, ...words) => selector(SIGNATURES[name]) + words.join("");
+const encodeSetPolicy = (agent, perPayment, perDay, expiry, restrict, payees) =>
+  call("setPolicy", addrWord(agent), word(perPayment), word(perDay), word(expiry), word(restrict ? 1 : 0), word(6 * 32), word(payees.length), ...payees.map(addrWord));
+const words = (hex) => (hex.slice(2).match(/.{64}/g) || []).map((w) => BigInt("0x" + w));
+const wordToAddress = (w) => "0x" + w.toString(16).padStart(40, "0");
+function parseUsdc(text) {
+  const t = String(text).trim();
+  if (!/^\d+(\.\d{1,6})?$/.test(t)) throw new Error(`"${t}" is not a USDC amount (digits, at most 6 decimals)`);
+  const [whole, frac = ""] = t.split(".");
+  return BigInt(whole) * 1000000n + BigInt((frac + "000000").slice(0, 6));
+}
+function formatUsdc(units) {
+  const whole = units / 1000000n, frac = (units % 1000000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return whole.toLocaleString("en-US") + (frac ? "." + frac : "");
+}
+const HINTS = {
+  NotOwner: "only the vault's owner can do this", NoPolicy: "this agent has no policy", ZeroAmount: "there is nothing to move",
+  InvalidPolicy: "the caps are not valid, or this policy allows any payee, so a payee list would have no effect",
+  ExpiryNotInFuture: "the expiry must be in the future", InvalidPayee: "this address cannot be a payee",
+};
+const errorNames = Object.fromEntries(ERRORS.map((e) => [selector(e), e]));
+function explain(data) {
+  if (!data || data.length < 10) return "reverted";
+  const sig = errorNames[data.slice(0, 10)];
+  if (!sig) return `reverted (${data.slice(0, 10)})`;
+  const args = words("0x" + data.slice(10));
+  const name = sig.slice(0, sig.indexOf("("));
+  if (name === "PolicyExpired") return `PolicyExpired: the policy expired at ${new Date(Number(args[0]) * 1000).toISOString()}`;
+  if (name === "PayeeNotAllowed") return `PayeeNotAllowed: ${wordToAddress(args[0])}`;
+  if (args.length === 2) return `${name}: ${formatUsdc(args[0])} against ${formatUsdc(args[1])} USDC`;
+  return HINTS[name] ? `${name} (${HINTS[name]})` : name;
+}
+
+// ------------------------------------------------------------------ JSON-RPC over fetch
+const $ = (id) => document.getElementById(id);
+let net = NETS.mainnet, vault = "", account = "";
+let rpcId = 1;
+async function rpc(method, params, tries = 4) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(net.rpc, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: rpcId++, method, params }) });
+      const json = await response.json();
+      if (json.error) { const e = new Error(json.error.message || "RPC error"); e.code = json.error.code; e.data = json.error.data; throw e; }
+      return json.result;
+    } catch (e) {
+      // -32014: a load-balanced backend has not imported the block yet; anything without revert data: retry briefly
+      const retryable = e.code === -32014 || e.code === undefined;
+      if (!retryable || attempt >= tries) throw e;
+      await new Promise((r) => setTimeout(r, 400 * attempt));
+    }
+  }
+}
+const read = async (to, data) => words(await rpc("eth_call", [{ to, data }, "latest"]));
+const link = (path, text) => { const a = document.createElement("a"); a.href = `${net.explorer}/${path}`; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = text; a.className = "mono"; return a; };
+const short = (h) => `${h.slice(0, 8)}...${h.slice(-6)}`;
+
+// ------------------------------------------------------------------ load the vault
+async function loadVault() {
+  net = NETS[$("net").value];
+  vault = $("vault").value.trim();
+  $("summary").hidden = true;
+  if (!isAddress(vault)) { $("loadMsg").textContent = "Enter the vault's address (0x followed by 40 hex digits)."; $("loadMsg").className = "bad"; return false; }
+  $("loadMsg").className = "muted"; $("loadMsg").textContent = `Reading ${net.name}...`;
+  try {
+    const code = await rpc("eth_getCode", [vault, "latest"]);
+    if (code === "0x") throw new Error(`there is no contract at this address on ${net.name}`);
+    const [[owner], [paused], [balance], [count]] = await Promise.all([read(vault, call0("owner")), read(vault, call0("paused")), read(vault, call0("vaultBalance")), read(vault, call0("paymentCount"))]);
+    $("sOwner").replaceChildren(link(`address/${wordToAddress(owner)}`, wordToAddress(owner)));
+    $("sPaused").textContent = paused ? "PAUSED" : "Active"; $("sPaused").className = paused ? "bad" : "ok";
+    $("sBalance").textContent = formatUsdc(balance) + " USDC"; $("sCount").textContent = count.toString();
+    $("summary").hidden = false; $("loadMsg").replaceChildren("Vault ", link(`address/${vault}`, vault), ` on ${net.name}.`);
+    const q = new URLSearchParams(location.search); q.set("net", $("net").value); q.set("vault", vault); history.replaceState(null, "", "?" + q.toString());
+    refreshWho();
+    return true;
+  } catch (e) {
+    const why = /revert/i.test(e.message || "") ? "the contract at this address does not answer like an Agent Allowance Vault" : e.message;
+    $("loadMsg").className = "bad"; $("loadMsg").textContent = "Could not load the vault: " + why; return false;
+  }
+}
+
+// ------------------------------------------------------------------ audit view
+let lastRows = [];
+async function runAudit() {
+  if (!(await loadVault())) return;
+  const agent = $("aAgent").value.trim();
+  if (agent && !isAddress(agent)) { $("aMsg").className = "bad"; $("aMsg").textContent = "The agent address is not valid."; return; }
+  $("aRun").disabled = true; $("aResult").hidden = true; $("aPolicyCard").hidden = true; $("aMsg").className = "muted";
+  try {
+    const latest = BigInt(await rpc("eth_blockNumber", []));
+    let from;
+    if ($("aRange").value === "from") { if (!/^\d+$/.test($("aFrom").value.trim())) throw new Error("enter the block to start from"); from = BigInt($("aFrom").value.trim()); }
+    else { from = latest - BigInt($("aRange").value); if (from < 0n) from = 0n; }
+    const topics = [topic(PAYMENT_EVENT), agent ? "0x" + addrWord(agent) : null];
+    const chunks = [];
+    for (let start = from; start <= latest; start += LOG_CHUNK) chunks.push([start, start + LOG_CHUNK - 1n < latest ? start + LOG_CHUNK - 1n : latest]);
+    const logs = []; let done = 0;
+    const worker = async () => { while (chunks.length) { const [a, b] = chunks.shift(); const part = await rpc("eth_getLogs", [{ address: vault, topics, fromBlock: "0x" + a.toString(16), toBlock: "0x" + b.toString(16) }]); logs.push(...part); done++; $("aMsg").textContent = `Reading events: ${done} requests done, ${chunks.length} to go...`; } };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    logs.sort((x, y) => Number(BigInt(x.blockNumber) - BigInt(y.blockNumber)) || Number(BigInt(x.logIndex) - BigInt(y.logIndex)));
+    const blocks = [...new Set(logs.map((l) => l.blockNumber))].slice(-300);
+    const times = {};
+    await Promise.all(blocks.map(async (b) => { try { times[b] = Number(BigInt((await rpc("eth_getBlockByNumber", [b, false])).timestamp)); } catch { /* time stays unknown */ } }));
+    lastRows = logs.map((l) => { const [id, amount] = words(l.data); return { id, amount, agent: "0x" + l.topics[1].slice(26), payee: "0x" + l.topics[2].slice(26), memo: l.topics[3], tx: l.transactionHash, time: times[l.blockNumber] }; });
+    renderRows();
+    const sum = lastRows.reduce((t, r) => t + r.amount, 0n);
+    $("aTitle").textContent = `${lastRows.length} payment${lastRows.length === 1 ? "" : "s"}, ${formatUsdc(sum)} USDC, blocks ${from} to ${latest}`;
+    $("aCheck").textContent = ""; $("aCheck").className = "muted";
+    if (agent) {
+      const [p, [spent], [avail], [total]] = await Promise.all([read(vault, call("policyOf", addrWord(agent))), read(vault, call("spentInWindow", addrWord(agent))), read(vault, call("availableToPay", addrWord(agent))), read(vault, call("totalPaidBy", addrWord(agent)))]);
+      const active = p[5] === 1n, expired = active && Number(p[2]) * 1000 <= Date.now();
+      $("pState").textContent = !active ? "No policy (never set or revoked)" : expired ? "Expired" : "Active"; $("pState").className = active && !expired ? "ok" : "bad";
+      $("pPer").textContent = formatUsdc(p[0]) + " USDC"; $("pDay").textContent = formatUsdc(p[1]) + " USDC";
+      $("pSpent").textContent = formatUsdc(spent) + " USDC"; $("pAvail").textContent = formatUsdc(avail) + " USDC";
+      $("pExp").textContent = active ? new Date(Number(p[2]) * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "-";
+      $("pPayees").textContent = !active ? "-" : p[4] === 1n ? "Only listed payees" : "Any payee"; $("pTotal").textContent = formatUsdc(total) + " USDC";
+      $("aPolicyCard").hidden = false;
+      if (sum === total) { $("aCheck").className = "ok"; $("aCheck").textContent = `Check passed: the events add up to exactly what the vault says this agent has paid in total (${formatUsdc(total)} USDC).`; }
+      else { $("aCheck").className = "warn"; $("aCheck").textContent = `The vault says this agent has paid ${formatUsdc(total)} USDC in total; the events in this range add up to ${formatUsdc(sum)} USDC. Choose a longer history to see the rest.`; }
+    }
+    $("aResult").hidden = false; $("aMsg").textContent = `Done: ${done} request${done === 1 ? "" : "s"} to ${net.rpc}.`;
+    const q = new URLSearchParams(location.search); if (agent) q.set("agent", agent); else q.delete("agent"); history.replaceState(null, "", "?" + q.toString());
+  } catch (e) { $("aMsg").className = "bad"; $("aMsg").textContent = "Could not read the events: " + e.message; }
+  $("aRun").disabled = false;
+}
+function renderRows() {
+  const memo = $("aMemo").value; const wanted = memo ? keccak256(utf8(memo)) : "";
+  $("aMemoHash").textContent = wanted ? `keccak256 = ${wanted}` : "";
+  let hits = 0;
+  $("aRows").replaceChildren(...lastRows.map((r) => {
+    const tr = document.createElement("tr"); if (wanted && r.memo === wanted) { tr.className = "hit"; hits++; }
+    const cell = (content, mono) => { const td = document.createElement("td"); if (mono) td.className = "mono"; td.append(content); tr.append(td); };
+    cell(r.id.toString()); cell(r.time ? new Date(r.time * 1000).toISOString().replace("T", " ").slice(0, 19) : "-");
+    cell(link(`address/${r.agent}`, short(r.agent))); cell(link(`address/${r.payee}`, short(r.payee))); cell(formatUsdc(r.amount));
+    cell(r.memo, true); cell(link(`tx/${r.tx}`, short(r.tx)));
+    return tr;
+  }));
+  if (wanted) $("aMemoHash").textContent += hits ? ` : ${hits} matching payment${hits === 1 ? "" : "s"} highlighted` : " : no payment carries this memo";
+}
+
+// ------------------------------------------------------------------ owner dashboard
+const log = (text) => { const el = $("log"); el.textContent = (el.textContent === "Nothing yet." ? "" : el.textContent + "\n") + `${new Date().toISOString().slice(11, 19)}  ${text}`; el.scrollTop = el.scrollHeight; };
+async function refreshWho() {
+  if (!account) return;
+  let note = "";
+  if (isAddress(vault)) { try { const [owner] = await read(vault, call0("owner")); note = wordToAddress(owner) === account.toLowerCase() ? " You are the owner of this vault." : " You are NOT the owner of this vault: its controls will refuse you."; } catch { /* vault not loaded */ } }
+  $("who").textContent = `Connected: ${account}.${note}`; $("who").className = note.includes("NOT") ? "warn" : "ok";
+}
+async function connect() {
+  if (!window.ethereum) { $("who").textContent = "No wallet found in this browser. Install a wallet that supports Arc, then reload."; $("who").className = "bad"; return; }
+  try {
+    [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    await ensureChain(); await refreshWho(); $("connect").textContent = "Connected";
+  } catch (e) { $("who").textContent = "Could not connect: " + (e.message || e); $("who").className = "bad"; }
+}
+async function ensureChain() {
+  const chainId = "0x" + net.chainId.toString(16);
+  try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId }] }); }
+  catch (e) {
+    if (e.code !== 4902) throw e; // 4902: the wallet does not know the chain yet
+    await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId, chainName: net.name, nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, rpcUrls: [net.rpc], blockExplorerUrls: [net.explorer] }] });
+  }
+}
+async function send(label, to, data) {
+  try {
+    if (!(await loadVault())) throw new Error("load a vault first");
+    if (!account) await connect();
+    if (!account) return;
+    await ensureChain();
+    try { await rpc("eth_call", [{ from: account, to, data }, "latest"], 1); } // dry run: show the vault's own reason instead of a wallet error
+    catch (e) { const d = typeof e.data === "string" ? e.data : e.data && e.data.data; throw new Error("the vault would refuse this: " + (d ? explain(d) : e.message)); }
+    log(`${label}: confirm in your wallet...`);
+    const hash = await window.ethereum.request({ method: "eth_sendTransaction", params: [{ from: account, to, data }] });
+    log(`${label}: sent ${hash}`);
+    for (let i = 0; i < 60; i++) {
+      const receipt = await rpc("eth_getTransactionReceipt", [hash]).catch(() => null);
+      if (receipt) { log(`${label}: ${receipt.status === "0x1" ? "done" : "REVERTED"}  ${net.explorer}/tx/${hash}`); await loadVault(); return; }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    log(`${label}: still pending, see ${net.explorer}/tx/${hash}`);
+  } catch (e) { log(`${label}: ${e.message || e}`); }
+}
+const need = (id, what) => { const v = $(id).value.trim(); if (!isAddress(v)) throw new Error(`enter ${what}`); return v; };
+const guard = (label, fn) => async () => { try { await fn(); } catch (e) { log(`${label}: ${e.message}`); } };
+
+$("fund").onclick = guard("Fund", () => send("Fund", USDC, call("transfer", addrWord(need("vault", "the vault address")), word(parseUsdc($("fAmount").value)))));
+$("setPolicy").onclick = guard("Set policy", () => {
+  const agent = need("pAgent", "the agent address");
+  const perPayment = parseUsdc($("pMaxPay").value), perDay = parseUsdc($("pMaxDay").value);
+  if (perPayment === 0n || perDay < perPayment) throw new Error("the daily cap must be at least the per-payment cap, and both above zero");
+  const expiry = Math.floor(new Date($("pExpiry").value).getTime() / 1000);
+  if (!Number.isFinite(expiry) || expiry * 1000 <= Date.now()) throw new Error("choose an expiry in the future");
+  const restrict = $("pRestrict").checked;
+  const payees = restrict ? $("pList").value.split(/[\s,]+/).filter(Boolean) : [];
+  for (const p of payees) if (!isAddress(p)) throw new Error(`"${p}" is not an address`);
+  return send("Set policy", vault || need("vault", "the vault address"), encodeSetPolicy(agent, perPayment, perDay, expiry, restrict, payees));
+});
+$("addPayee").onclick = guard("Allow payee", () => send("Allow payee", need("vault", "the vault address"), call("setPayee", addrWord(need("pAgent", "the agent address")), addrWord(need("yPayee", "the payee address")), word(1))));
+$("delPayee").onclick = guard("Remove payee", () => send("Remove payee", need("vault", "the vault address"), call("setPayee", addrWord(need("pAgent", "the agent address")), addrWord(need("yPayee", "the payee address")), word(0))));
+$("revoke").onclick = guard("Revoke", () => send("Revoke agent", need("vault", "the vault address"), call("revokeAgent", addrWord(need("pAgent", "the agent address")))));
+$("pause").onclick = guard("Pause", () => send("Pause", need("vault", "the vault address"), call0("pause")));
+$("unpause").onclick = guard("Unpause", () => send("Unpause", need("vault", "the vault address"), call0("unpause")));
+$("withdraw").onclick = guard("Withdraw", async () => {
+  if (!account) await connect();
+  const to = $("wTo").value.trim() || account;
+  if (!isAddress(to)) throw new Error("enter the address to withdraw to");
+  const amount = $("wAmount").value.trim();
+  return send("Withdraw", need("vault", "the vault address"), amount ? call("withdraw", addrWord(to), word(parseUsdc(amount))) : call("withdrawAll", addrWord(to)));
+});
+$("connect").onclick = connect;
+$("load").onclick = loadVault;
+$("aRun").onclick = runAudit;
+$("aMemo").oninput = renderRows;
+$("pRestrict").onchange = () => { $("pList").disabled = !$("pRestrict").checked; };
+function showTab(name) { $("audit").hidden = name !== "audit"; $("owner").hidden = name !== "owner"; $("tabAudit").setAttribute("aria-selected", name === "audit"); $("tabOwner").setAttribute("aria-selected", name === "owner"); }
+$("tabAudit").onclick = () => showTab("audit");
+$("tabOwner").onclick = () => showTab("owner");
+if (window.ethereum && window.ethereum.on) window.ethereum.on("accountsChanged", (a) => { account = a[0] || ""; refreshWho(); });
+
+// ------------------------------------------------------------------ start: ?net=mainnet|testnet&vault=0x..&agent=0x..&from=block&view=owner
+(function start() {
+  const q = new URLSearchParams(location.search);
+  if (NETS[q.get("net")]) $("net").value = q.get("net");
+  if (isAddress(q.get("vault") || "")) $("vault").value = q.get("vault");
+  if (isAddress(q.get("agent") || "")) $("aAgent").value = q.get("agent");
+  if (/^\d+$/.test(q.get("from") || "")) { $("aFrom").value = q.get("from"); $("aRange").value = "from"; }
+  const week = new Date(Date.now() + 7 * 86400e3 - new Date().getTimezoneOffset() * 60e3); $("pExpiry").value = week.toISOString().slice(0, 16);
+  if (q.get("view") === "owner") showTab("owner");
+  if ($("vault").value) { loadVault().then((ok) => { if (ok && (q.get("agent") || q.get("from"))) runAudit(); }); return; }
+  // No vault in the link: open this project's own deployment, if deployments.json (written by script/deploy.mjs) lists one.
+  fetch("deployments.json").then((r) => (r.ok ? r.json() : {})).then((d) => {
+    const key = q.get("net") && d[q.get("net")] ? q.get("net") : d.mainnet ? "mainnet" : d.testnet ? "testnet" : "";
+    if (!key || !isAddress(d[key].address || "")) return;
+    $("net").value = key; $("vault").value = d[key].address;
+    if (/^\d+$/.test(String(d[key].blockNumber || ""))) { $("aFrom").value = String(d[key].blockNumber); $("aRange").value = "from"; }
+    return runAudit();
+  }).catch(() => { /* no deployments file: the visitor types an address */ });
+})();
+</script>
+</body>
+</html>
